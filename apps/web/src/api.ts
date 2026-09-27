@@ -5,6 +5,7 @@ const BG_KEY = "rain-go:bg";
 const LAST_GAME_KEY = "rain-go:last-game";
 const NAMES_KEY = "rain-go:names";
 const LAST_NAMES_KEY = "rain-go:last-names";
+const SERVER_URL_KEY = "rain-go:server-url";
 
 const readJson = <T,>(k: string, fallback: T): T => {
   try {
@@ -31,6 +32,37 @@ const write = (k: string, v: string) => {
   }
 };
 
+/**
+ * 获取当前生效的裁判后端服务地址
+ * 优先顺序：URL 参数中的 serverUrl -> localStorage 缓存 -> 官方云端节点
+ */
+export function getResolvedServerUrl(): string {
+  if (typeof window !== "undefined") {
+    try {
+      const q = new URLSearchParams(location.search);
+      let s = q.get("serverUrl");
+      if (!s && location.hash.includes("serverUrl=")) {
+        const hashQuery = location.hash.includes("?") ? location.hash.split("?")[1] : location.hash.slice(1);
+        s = new URLSearchParams(hashQuery).get("serverUrl");
+      }
+      if (s && s.trim()) {
+        const clean = s.trim().replace(/\/+$/, "");
+        prefs.setServerUrl(clean);
+        return clean;
+      }
+    } catch (_) {}
+  }
+  const cached = prefs.serverUrl();
+  if (cached) return cached;
+
+  // 读取主播掌机主系统配置的 Key（如果存在同域存储）
+  const mcytLobby = read("mcyt_lobby_server_url");
+  if (mcytLobby) return mcytLobby.trim().replace(/\/+$/, "");
+
+  // 默认云端保活节点
+  return "http://121.43.122.253:8787";
+}
+
 export const prefs = {
   token: () => read(TOKEN_KEY),
   setToken: (v: string) => write(TOKEN_KEY, v.trim()),
@@ -38,6 +70,9 @@ export const prefs = {
   setBackground: (v: string) => write(BG_KEY, v.trim()),
   lastGame: () => read(LAST_GAME_KEY),
   setLastGame: (v: string) => write(LAST_GAME_KEY, v),
+  serverUrl: () => read(SERVER_URL_KEY),
+  setServerUrl: (v: string) => write(SERVER_URL_KEY, v.trim()),
+  setServer: (v: string) => write(SERVER_URL_KEY, v.trim()),
   /** Recently used player names, newest first. */
   recentNames: (): string[] => readJson<string[]>(NAMES_KEY, []).filter((n) => typeof n === "string"),
   rememberNames: (...names: (string | undefined)[]) => {
@@ -70,7 +105,15 @@ async function request<T>(path: string, init: RequestInit = {}, seatToken?: stri
   if (token) headers.set("authorization", `Bearer ${token}`);
   if (seatToken) headers.set("x-seat", seatToken);
   if (init.body) headers.set("content-type", "application/json");
-  const res = await fetch(path, { ...init, headers });
+
+  // 将相对路径补全为具备独立域名的完整 URL，防止本地 file:// 协议请求失效
+  let fullUrl = path;
+  if (path.startsWith("/")) {
+    const base = getResolvedServerUrl();
+    fullUrl = `${base}${path}`;
+  }
+
+  const res = await fetch(fullUrl, { ...init, headers });
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) throw new ApiError(res.status, String(body.error ?? res.status), String(body.message ?? body.error ?? res.statusText));
   return body as T;
