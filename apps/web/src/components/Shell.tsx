@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { prefs } from "../api";
-import { navigate, type Route } from "../router";
+import { isEmbedded, navigate, type Route } from "../router";
 import { IconBoard, IconGear, IconHome, IconTerminal } from "./icons";
 import { Settings } from "./Settings";
 
@@ -59,6 +59,20 @@ function Backdrop() {
 export function Header({ status, left }: { status: ReactNode; left?: ReactNode }) {
   const now = useNow();
   const [open, setOpen] = useState(false);
+  const embedded = isEmbedded();
+
+  // 掌机嵌入模式下：隐藏日历与多余的原生设置齿轮，界面保持轻简原生
+  if (embedded) {
+    return (
+      <header className="flex shrink-0 items-center justify-between gap-3 pt-1 pb-1">
+        <div className="min-w-0">{left}</div>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="chip !text-xs !py-0.5 !px-2">{status}</span>
+        </div>
+      </header>
+    );
+  }
+
   return (
     <header className="flex shrink-0 items-center justify-between gap-3 pt-[max(12px,env(safe-area-inset-top))] pb-2.5 land:pt-2 land:pb-2 lg:pt-6 lg:pb-4">
       <div className="min-w-0">
@@ -86,6 +100,9 @@ const NAV = [
 ] as const;
 
 function BottomNav({ route }: { route: Route }) {
+  // 嵌入主播掌机时，彻底隐藏原生底栏（消灭大厅/棋盘/连接）
+  if (isEmbedded()) return null;
+
   const go = (key: (typeof NAV)[number]["key"]) => {
     if (key === "lobby") navigate("/");
     else if (key === "connect") navigate("/connect");
@@ -116,12 +133,16 @@ function BottomNav({ route }: { route: Route }) {
 }
 
 export function Shell({ route, children, wide = false }: { route: Route; children: ReactNode; wide?: boolean }) {
+  const embedded = isEmbedded();
+
   return (
     <>
       <Backdrop />
       <main
-        className={`mx-auto flex h-dvh flex-col overflow-hidden px-4 pb-[calc(80px+max(10px,env(safe-area-inset-bottom)))] land:max-w-none land:pr-[max(12px,env(safe-area-inset-right))] land:pb-[max(8px,env(safe-area-inset-bottom))] land:pl-[max(12px,env(safe-area-inset-left))] lg:block lg:h-auto lg:overflow-visible lg:pb-40 ${
-          wide ? "max-w-[520px] lg:max-w-[1100px]" : "max-w-[520px]"
+        className={`mx-auto flex h-dvh flex-col overflow-hidden px-3 land:max-w-none land:pr-[max(12px,env(safe-area-inset-right))] land:pb-[max(8px,env(safe-area-inset-bottom))] land:pl-[max(12px,env(safe-area-inset-left))] lg:block lg:h-auto lg:overflow-visible ${
+          embedded
+            ? "max-w-[520px] pb-2"
+            : `pb-[calc(80px+max(10px,env(safe-area-inset-bottom)))] lg:pb-40 ${wide ? "max-w-[520px] lg:max-w-[1100px]" : "max-w-[520px]"}`
         }`}
       >
         {children}

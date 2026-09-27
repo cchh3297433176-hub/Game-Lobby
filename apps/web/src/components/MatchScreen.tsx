@@ -1,6 +1,6 @@
 import { GAMES, type MatchAction, type MatchView, type Seat } from "@rain-go/engine";
 import { motion } from "motion/react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, useMemo, type ReactNode } from "react";
 import { UIS } from "../games";
 import type { BoardProps } from "../games/types";
 import { ChatInput, ChatList, Sheet } from "./Chat";
@@ -9,10 +9,35 @@ import { Settings } from "./Settings";
 import { NameSheet } from "./NameSheet";
 import { Pill, Stat } from "./Pill";
 import { Header, useLandscape, useWide } from "./Shell";
-import { navigate } from "../router";
+import { isEmbedded, navigate } from "../router";
 import { useToast } from "./Toast";
 
 const card = { initial: { opacity: 0, y: 14 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.35 } };
+
+interface CustomNpcInfo {
+  id: string;
+  name: string;
+  avatar?: string;
+}
+
+/**
+ * 从 URL 解析掌机传递过来的自建同伴信息
+ */
+function useEmbeddedNpcs(): CustomNpcInfo[] {
+  return useMemo(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const q = new URLSearchParams(location.search);
+      let raw = q.get("npcs");
+      if (!raw && location.hash.includes("npcs=")) {
+        const hashQuery = location.hash.includes("?") ? location.hash.split("?")[1] : location.hash.slice(1);
+        raw = new URLSearchParams(hashQuery).get("npcs");
+      }
+      if (raw) return JSON.parse(raw);
+    } catch (_) {}
+    return [];
+  }, []);
+}
 
 /**
  * The shared game screen for any number of seats. `match.me` is the seat this screen plays
@@ -35,6 +60,8 @@ export function MatchScreen({
   const wide = useWide();
   const landscape = useLandscape();
   const toast = useToast();
+  const embedded = isEmbedded();
+  const embeddedNpcs = useEmbeddedNpcs();
   const [busy, setBusy] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [namesOpen, setNamesOpen] = useState(false);
@@ -124,6 +151,43 @@ export function MatchScreen({
           : "LOSE"
     : null;
 
+  // 结算监听：当产生 outcome 时，向主播掌机宿主 postMessage 发送结算战报
+  useEffect(() => {
+    if (!st.outcome) return;
+    const isMeWin = me !== null && st.outcome.winners.includes(me);
+    const resultType = isMeWin ? "胜" : "负";
+    const movesCount = match.log.length;
+
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage(
+          {
+            type: "MCYT_LOBBY_MATCH_FINISH",
+            action: "game_over",
+            resultType,
+            winner: isMeWin ? "me" : "ai",
+            movesCount,
+            kind: match.kind,
+            log: match.log,
+          },
+          "*",
+        );
+      }
+    } catch (_) {}
+  }, [st.outcome, me, match.log.length, match.kind]);
+
+  const exitToHost = () => {
+    if (embedded) {
+      if (confirm("确定要退出当前对战返回大厅吗？")) {
+        try {
+          window.parent?.postMessage({ type: "MCYT_LOBBY_EXIT" }, "*");
+        } catch (_) {}
+      }
+    } else {
+      navigate("/");
+    }
+  };
+
   const resign = () => confirm("确定认输吗？") && void send({ type: "resign" });
   const Actions = ui.Actions;
   const board =
@@ -138,6 +202,11 @@ export function MatchScreen({
         <ui.Board {...props} />
       </div>
     );
+
+  // 获取当前 featured 角色的头像（来自掌机自建同伴列表）
+  const featuredNpc = embeddedNpcs.find(
+    (npc) => npc.name === names[featured] || String(featured) === npc.id,
+  ) || embeddedNpcs[0];
 
   /** One chip per seat for tables of three or more. */
   const seatStrip =
@@ -185,8 +254,12 @@ export function MatchScreen({
 
   const pill = (
     <button onClick={() => setChatOpen(true)} className="pill-black flex shrink-0 items-center gap-3 !rounded-[26px] px-3.5 py-2.5 text-left land:gap-2.5 land:!rounded-[18px] land:px-2.5 land:py-2 land:shadow-none">
-      <span className="relative grid h-11 w-11 shrink-0 place-items-center rounded-full border-2 border-[#3a3a3a] bg-[#161616] land:h-9 land:w-9">
-        <DropMark width={24} height={24} className="land:h-5 land:w-5" />
+      <span className="relative grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-full border-2 border-[#3a3a3a] bg-[#161616] land:h-9 land:w-9">
+        {featuredNpc?.avatar ? (
+          <img src={featuredNpc.avatar} alt={names[featured]} className="h-full w-full object-cover" />
+        ) : (
+          <DropMark width={24} height={24} className="land:h-5 land:w-5" />
+        )}
         {unread && <span className="absolute -top-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-black bg-accent" />}
       </span>
       <span className="min-w-0 flex-1">
@@ -199,6 +272,7 @@ export function MatchScreen({
       </span>
     </button>
   );
+
   const iconButtons = (
     <>
       {!st.outcome && me !== null && (
@@ -211,9 +285,11 @@ export function MatchScreen({
           <IconInvite width={20} height={20} />
         </button>
       )}
-      <button className="btn btn-glass shrink-0 !px-3.5" onClick={() => setNamesOpen(true)} aria-label="名字">
-        <IconName width={20} height={20} />
-      </button>
+      {!embedded && (
+        <button className="btn btn-glass shrink-0 !px-3.5" onClick={() => setNamesOpen(true)} aria-label="名字">
+          <IconName width={20} height={20} />
+        </button>
+      )}
       <button className="btn btn-glass relative shrink-0 !px-3.5" onClick={() => setChatOpen(true)} aria-label="聊天">
         <IconChat width={20} height={20} />
         {unread && <span className="absolute top-1.5 right-2 h-2 w-2 rounded-full bg-accent" />}
@@ -222,9 +298,6 @@ export function MatchScreen({
   );
 
   if (!wide && landscape) {
-    // Phone held sideways: the board on the left at full height, one glass panel on the right with
-    // status and opponent at the top, recent moves in the middle, and the controls at the bottom
-    // where the right thumb rests.
     const square = ui.shape === "square";
     const recent = match.log.slice(-6);
     const lastChat = match.chat.at(-1);
@@ -251,7 +324,6 @@ export function MatchScreen({
                   <div className="mt-1 text-[0.8rem] leading-snug text-faint">{mod.blurb}</div>
                 </div>
               )}
-              {/* Newest at the bottom; when space runs out the oldest lines are the ones cut off. */}
               <div className="flex min-h-0 flex-col-reverse gap-0.5 overflow-hidden [mask-image:linear-gradient(to_top,black_70%,transparent)]">
                 {[...recent].reverse().map((l, i) => (
                   <div key={match.log.length - i} className={`flex shrink-0 gap-1.5 truncate text-[0.82rem] leading-snug ${i === 0 ? "text-ink" : "text-muted"}`}>
@@ -272,7 +344,7 @@ export function MatchScreen({
               </div>
             )}
             <div className="flex shrink-0 items-center justify-between px-0.5">
-              <button className={tool} onClick={() => navigate("/")} aria-label="回大厅">
+              <button className={tool} onClick={exitToHost} aria-label="回大厅">
                 <IconHome width={20} height={20} />
               </button>
               {!st.outcome && me !== null && (
@@ -285,16 +357,20 @@ export function MatchScreen({
                   <IconInvite width={20} height={20} />
                 </button>
               )}
-              <button className={tool} onClick={() => setNamesOpen(true)} aria-label="名字">
-                <IconName width={20} height={20} />
-              </button>
+              {!embedded && (
+                <button className={tool} onClick={() => setNamesOpen(true)} aria-label="名字">
+                  <IconName width={20} height={20} />
+                </button>
+              )}
               <button className={tool} onClick={() => setChatOpen(true)} aria-label="聊天">
                 <IconChat width={20} height={20} />
                 {unread && <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-accent" />}
               </button>
-              <button className={tool} onClick={() => setSettingsOpen(true)} aria-label="设置">
-                <IconGear width={19} height={19} />
-              </button>
+              {!embedded && (
+                <button className={tool} onClick={() => setSettingsOpen(true)} aria-label="设置">
+                  <IconGear width={19} height={19} />
+                </button>
+              )}
             </div>
             {extra && <div className="shrink-0 [&_.btn]:!min-h-[32px] [&_.btn]:!text-xs">{extra}</div>}
           </aside>
@@ -361,9 +437,11 @@ export function MatchScreen({
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-x-2 text-[1.05rem] text-muted">
             <span>{seatLine}</span>
-            <button className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.95rem] text-ink-2 hover:bg-white/50" onClick={() => setNamesOpen(true)}>
-              <IconName width={16} height={16} /> 改名
-            </button>
+            {!embedded && (
+              <button className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.95rem] text-ink-2 hover:bg-white/50" onClick={() => setNamesOpen(true)}>
+                <IconName width={16} height={16} /> 改名
+              </button>
+            )}
             {onInvite && (
               <button className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.95rem] text-ink-2 hover:bg-white/50" onClick={onInvite}>
                 <IconInvite width={16} height={16} /> 邀请
