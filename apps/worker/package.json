@@ -1,0 +1,31 @@
+{
+  "name": "@rain-go/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc -p .",
+    "typecheck": "tsc -p .",
+    "test": "echo 'worker: covered by smoke test (pnpm smoke)'",
+    "smoke": "node scripts/smoke.mjs",
+    "all-games": "node scripts/all-games.mjs"
+  },
+  "dependencies": {
+    "@cfworker/json-schema": "^4.1.1",
+    "@hono/node-server": "^1.13.8",
+    "@hono/node-ws": "^1.0.6",
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "@rain-go/engine": "workspace:*",
+    "hono": "^4.13.9",
+    "ws": "^8.18.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,40 @@
+name: Clean Git History (Reset to Single Commit)
+
+# 仅允许在 GitHub Actions 页面手动点击触发，绝对不会误触
+on:
+  workflow_dispatch:
+
+jobs:
+  reset-history:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code (Full History)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 检出完整历史以进行安全清洗重构
+
+      - name: Reset to Clean Single Commit
+        run: |
+          # 1. 配置 Git 基础提交身份
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # 2. 创建一个全新的孤立分支（孤立分支不包含任何历史提交）
+          git checkout --orphan temp_clean_branch
+
+          # 3. 将当前所有最新工作区代码添加进暂存区
+          git add -A
+
+          # 4. 提交为一个全新的整洁起点
+          git commit -m "feat: initial clean release"
+
+          # 5. 删除原有的 main 分支
+          git branch -D main || git branch -D master
+
+          # 6. 将当前干净分支重命名为 main
+          git branch -m main
+
+          # 7. 强行推送到远程仓库，彻底覆盖并物理抹除所有旧 Commit 记录
+          git push -f origin main
+
+          echo "🎉 恭喜李敏！过去的旧 Commit 历史已全部抹除，仓库已成功脱胎换骨为全新干净起点！"
