@@ -5,15 +5,24 @@ import { InviteSheet } from "../components/InviteSheet";
 import { MatchScreen } from "../components/MatchScreen";
 import { Header, hhmm } from "../components/Shell";
 import { useToast } from "../components/Toast";
-import { navigate } from "../router";
+import { isEmbedded, navigate } from "../router";
 import { useMatch } from "../useMatch";
 
-/** Reads `?t=<seat token>` and `?invite` once, remembers the token, and cleans the address bar. */
+/** Reads `?t=<seat token>` or `?token=<seat token>`, remembers the token, and initializes parameters. */
 function takeUrlParams(id: string) {
   const q = new URLSearchParams(location.search);
-  const t = q.get("t");
+  const t = q.get("t") || q.get("token");
   if (t) prefs.setSeatToken(id, t);
-  if (q.size) history.replaceState(null, "", `/g/${id}`);
+
+  // 如果掌机传递了裁判服务器地址，自动同步进 prefs
+  const serverUrl = q.get("serverUrl");
+  if (serverUrl && typeof (prefs as any).setServer === "function") {
+    (prefs as any).setServer(serverUrl);
+  }
+
+  if (q.size && !isEmbedded()) {
+    history.replaceState(null, "", `/g/${id}`);
+  }
   return { invite: q.has("invite") };
 }
 
@@ -25,6 +34,7 @@ export function MatchPage({ id }: { id: string }) {
   const [inviteOpen, setInviteOpen] = useState(params.invite);
   const [choices, setChoices] = useState<{ invites: Invite[]; tokens: (string | null)[] } | null>(null);
   const toast = useToast();
+  const embedded = isEmbedded();
 
   useEffect(() => prefs.setLastGame(id), [id]);
   useEffect(() => {
@@ -32,6 +42,7 @@ export function MatchPage({ id }: { id: string }) {
       if (!c.authRequired || prefs.token()) setOwner(true);
     }, () => {});
   }, []);
+
   // The site owner opening a game without a seat may take one of the human seats.
   useEffect(() => {
     if (!owner || token || !match) return;
@@ -39,6 +50,16 @@ export function MatchPage({ id }: { id: string }) {
       if (r.tokens.some(Boolean)) setChoices(r);
     }, () => {});
   }, [owner, token, id, match?.id]);
+
+  const handleBackToLobby = () => {
+    if (embedded) {
+      try {
+        window.parent?.postMessage({ type: "MCYT_LOBBY_EXIT" }, "*");
+      } catch (_) {}
+    } else {
+      navigate("/");
+    }
+  };
 
   if (error || !match) {
     return (
@@ -48,12 +69,12 @@ export function MatchPage({ id }: { id: string }) {
           {error ? (
             <div>
               <div className="text-2xl">{error}</div>
-              <button className="btn btn-ink mt-6" onClick={() => navigate("/")}>
+              <button className="btn btn-ink mt-6" onClick={handleBackToLobby}>
                 回大厅
               </button>
             </div>
           ) : (
-            <span className="text-muted">Loading…</span>
+            <span className="text-muted">正在加载棋局...</span>
           )}
         </div>
       </>
