@@ -4,8 +4,7 @@ import { useEffect, useState, useMemo, type ReactNode } from "react";
 import { UIS } from "../games";
 import type { BoardProps } from "../games/types";
 import { ChatInput, ChatList, Sheet } from "./Chat";
-import { DropMark, IconChat, IconFlag, IconGear, IconHome, IconInvite, IconName } from "./icons";
-import { Settings } from "./Settings";
+import { DropMark, IconChat, IconFlag, IconHome, IconInvite, IconName } from "./icons";
 import { NameSheet } from "./NameSheet";
 import { Pill, Stat } from "./Pill";
 import { Header, useLandscape, useWide } from "./Shell";
@@ -20,9 +19,7 @@ interface CustomNpcInfo {
   avatar?: string;
 }
 
-/**
- * 从 URL 解析掌机传递过来的自建同伴信息
- */
+/** 从 URL 与 Hash 解析掌机传递过来的自建同伴真实数据 */
 function useEmbeddedNpcs(): CustomNpcInfo[] {
   return useMemo(() => {
     if (typeof window === "undefined") return [];
@@ -39,10 +36,47 @@ function useEmbeddedNpcs(): CustomNpcInfo[] {
   }, []);
 }
 
-/**
- * The shared game screen for any number of seats. `match.me` is the seat this screen plays
- * (null for a spectator). `perform` throws an Error whose message is shown as a toast.
- */
+/** 微信原生白灰微绿确认弹窗，彻底歼灭系统默认的丑陋原生 confirm */
+function WeChatConfirmModal({
+  title = "提示",
+  content,
+  onConfirm,
+  onCancel,
+}: {
+  title?: string;
+  content: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/45 p-4 animate-in fade-in duration-200">
+      <div className="w-full max-w-[310px] overflow-hidden rounded-[14px] border border-[#eaeaea] bg-white text-[#222] shadow-[0_10px_35px_rgba(0,0,0,0.18)]">
+        <div className="px-5 pt-5 pb-3 text-center">
+          <div className="text-[16px] font-semibold text-[#181818]">{title}</div>
+          <div className="mt-2 text-[13.5px] leading-relaxed text-[#666]">{content}</div>
+        </div>
+        <div className="flex border-t border-[#f0f0f0]">
+          <button
+            type="button"
+            className="flex-1 py-3 text-[14px] font-medium text-[#555] active:bg-[#f7f7f7]"
+            onClick={onCancel}
+          >
+            取消
+          </button>
+          <div className="w-[0.5px] bg-[#f0f0f0]" />
+          <button
+            type="button"
+            className="flex-1 py-3 text-[14px] font-semibold text-[#fa5151] active:bg-[#f7f7f7]"
+            onClick={onConfirm}
+          >
+            确定
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function MatchScreen({
   match,
   perform,
@@ -54,7 +88,6 @@ export function MatchScreen({
   perform: (a: MatchAction) => Promise<void>;
   chip: ReactNode;
   extra?: ReactNode;
-  /** Shown as an invite button when the table still has open seats. */
   onInvite?: () => void;
 }) {
   const wide = useWide();
@@ -65,8 +98,10 @@ export function MatchScreen({
   const [busy, setBusy] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [namesOpen, setNamesOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [confirmResign, setConfirmResign] = useState(false);
   const [seenChat, setSeenChat] = useState(0);
+  const [imgError, setImgError] = useState(false);
+
   const mod = GAMES[match.kind];
   const ui = UIS[match.kind];
   const me = match.me;
@@ -77,25 +112,26 @@ export function MatchScreen({
     if (chatOpen) setSeenChat(match.chat.length);
   }, [chatOpen, match.chat.length]);
 
-  // Card tables are roomier sideways: tell portrait phone users once per game.
-  useEffect(() => {
-    if (wide || landscape || !ui.prefersLandscape) return;
-    const key = `rain-go:rotate-tip:${match.kind}`;
-    try {
-      if (localStorage.getItem(key)) return;
-      localStorage.setItem(key, "1");
-    } catch {
-      return;
-    }
-    const t = setTimeout(() => toast.show("把手机横过来，牌桌更宽敞"), 900);
-    return () => clearTimeout(t);
-  }, [wide, landscape, ui.prefersLandscape, match.kind, toast.show]);
-
   const send = async (a: MatchAction) => {
     if (busy || me === null) return false;
     setBusy(true);
     try {
       await perform(a);
+      // 如果是说话动作用 postMessage 同步掌机触发活人反应
+      if (a.type === "say") {
+        try {
+          window.parent?.postMessage(
+            {
+              type: "MCYT_LOBBY_CHAT_SPOKEN",
+              seat: me,
+              text: a.text,
+              matchId: match.id,
+              kind: match.kind,
+            },
+            "*",
+          );
+        } catch (_) {}
+      }
       return true;
     } catch (e) {
       toast.show(e instanceof Error ? e.message : "出错了");
@@ -116,6 +152,7 @@ export function MatchScreen({
     toast: toast.show,
     compact: !wide,
   };
+
   const others = match.seats.map((_, i) => i).filter((i) => i !== me);
   const lastOther = [...match.chat].reverse().find((c) => c.seat !== me);
   const acting = st.waitingOn.find((s) => s !== me);
@@ -151,7 +188,7 @@ export function MatchScreen({
           : "LOSE"
     : null;
 
-  // 结算监听：当产生 outcome 时，向主播掌机宿主 postMessage 发送结算战报
+  // 结算监听：向掌机派发战报
   useEffect(() => {
     if (!st.outcome) return;
     const isMeWin = me !== null && st.outcome.winners.includes(me);
@@ -178,17 +215,14 @@ export function MatchScreen({
 
   const exitToHost = () => {
     if (embedded) {
-      if (confirm("确定要退出当前对战返回大厅吗？")) {
-        try {
-          window.parent?.postMessage({ type: "MCYT_LOBBY_EXIT" }, "*");
-        } catch (_) {}
-      }
+      try {
+        window.parent?.postMessage({ type: "MCYT_LOBBY_EXIT" }, "*");
+      } catch (_) {}
     } else {
       navigate("/");
     }
   };
 
-  const resign = () => confirm("确定认输吗？") && void send({ type: "resign" });
   const Actions = ui.Actions;
   const board =
     ui.shape === "square" ? (
@@ -203,15 +237,19 @@ export function MatchScreen({
       </div>
     );
 
-  // 获取当前 featured 角色的头像（来自掌机自建同伴列表）
-  const featuredNpc = embeddedNpcs.find(
-    (npc) => npc.name === names[featured] || String(featured) === npc.id,
-  ) || embeddedNpcs[0];
+  // 精准匹配自建联系人头像，增强防御并消灭裂图
+  const featuredName = names[featured] || "";
+  const featuredNpc =
+    embeddedNpcs.find((npc) => npc.name === featuredName || String(featured) === npc.id) ||
+    embeddedNpcs[featured - 1] ||
+    embeddedNpcs[0];
 
-  /** One chip per seat for tables of three or more. */
+  const avatarSrc = featuredNpc?.avatar?.trim();
+
+  /** 局内座位药丸标签 */
   const seatStrip =
     n > 2 ? (
-      <div className="flex shrink-0 gap-1.5 overflow-x-auto">
+      <div className="flex shrink-0 gap-1.5 overflow-x-auto py-0.5">
         {match.seats.map((s, i) => {
           const waiting = !st.outcome && st.waitingOn.includes(i);
           return (
@@ -249,26 +287,44 @@ export function MatchScreen({
           }}
         />
       )}
+      {confirmResign && (
+        <WeChatConfirmModal
+          title="认输确认"
+          content="认输后当局将直接结算，是否确定认输？"
+          onConfirm={() => {
+            setConfirmResign(false);
+            void send({ type: "resign" });
+          }}
+          onCancel={() => setConfirmResign(false)}
+        />
+      )}
     </>
   );
 
   const pill = (
-    <button onClick={() => setChatOpen(true)} className="pill-black flex shrink-0 items-center gap-3 !rounded-[26px] px-3.5 py-2.5 text-left land:gap-2.5 land:!rounded-[18px] land:px-2.5 land:py-2 land:shadow-none">
-      <span className="relative grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-full border-2 border-[#3a3a3a] bg-[#161616] land:h-9 land:w-9">
-        {featuredNpc?.avatar ? (
-          <img src={featuredNpc.avatar} alt={names[featured]} className="h-full w-full object-cover" />
+    <button onClick={() => setChatOpen(true)} className="pill-black flex shrink-0 items-center gap-3 !rounded-[24px] px-3.5 py-2.5 text-left land:gap-2 land:!rounded-[16px] land:px-2.5 land:py-1.5">
+      <span className="relative grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-full border border-white/15 bg-[#222] land:h-9 land:w-9">
+        {avatarSrc && !imgError ? (
+          <img
+            src={avatarSrc}
+            alt={featuredName}
+            className="h-full w-full object-cover"
+            onError={() => setImgError(true)}
+          />
         ) : (
-          <DropMark width={24} height={24} className="land:h-5 land:w-5" />
+          <div className="flex h-full w-full items-center justify-center bg-[#07c160]/20 text-xs font-semibold text-[#07c160]">
+            {featuredName ? featuredName.slice(0, 1) : <DropMark width={20} height={20} />}
+          </div>
         )}
-        {unread && <span className="absolute -top-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-black bg-accent" />}
+        {unread && <span className="absolute top-0 right-0 h-2.5 w-2.5 rounded-full border border-black bg-[#fa5151]" />}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[1.25rem] italic leading-tight land:text-[1.05rem]">{names[featured]}</span>
-        <span className="block truncate text-[0.9rem] text-white/70 land:text-[0.8rem]">{subtitle}</span>
+        <span className="block truncate text-[1.2rem] font-semibold leading-tight text-white land:text-[1rem]">{featuredName}</span>
+        <span className="block truncate text-[0.85rem] text-white/70 land:text-[0.75rem]">{subtitle}</span>
       </span>
       <span className="shrink-0 text-right">
-        <span className="block text-[1.4rem] font-bold leading-none land:text-[1.15rem]">{verdict ?? badge.value}</span>
-        <span className="mt-1 block text-[0.72rem] text-white/55 land:text-[0.65rem]">{verdict ? mod.name.zh : badge.label}</span>
+        <span className="block text-[1.35rem] font-bold leading-none text-white land:text-[1.1rem]">{verdict ?? badge.value}</span>
+        <span className="mt-1 block text-[0.7rem] text-white/55 land:text-[0.62rem]">{verdict ? mod.name.zh : badge.label}</span>
       </span>
     </button>
   );
@@ -276,120 +332,37 @@ export function MatchScreen({
   const iconButtons = (
     <>
       {!st.outcome && me !== null && (
-        <button className="btn btn-glass shrink-0 !px-3.5" onClick={resign} aria-label="认输">
-          <IconFlag width={20} height={20} />
+        <button className="btn btn-glass shrink-0 !px-3.5" onClick={() => setConfirmResign(true)} aria-label="认输">
+          <IconFlag width={19} height={19} />
         </button>
       )}
       {onInvite && openSeats && (
         <button className="btn btn-glass shrink-0 !px-3.5" onClick={onInvite} aria-label="邀请">
-          <IconInvite width={20} height={20} />
+          <IconInvite width={19} height={19} />
         </button>
       )}
       {!embedded && (
         <button className="btn btn-glass shrink-0 !px-3.5" onClick={() => setNamesOpen(true)} aria-label="名字">
-          <IconName width={20} height={20} />
+          <IconName width={19} height={19} />
         </button>
       )}
       <button className="btn btn-glass relative shrink-0 !px-3.5" onClick={() => setChatOpen(true)} aria-label="聊天">
-        <IconChat width={20} height={20} />
-        {unread && <span className="absolute top-1.5 right-2 h-2 w-2 rounded-full bg-accent" />}
+        <IconChat width={19} height={19} />
+        {unread && <span className="absolute top-1.5 right-2 h-2 w-2 rounded-full bg-[#fa5151]" />}
       </button>
     </>
   );
 
-  if (!wide && landscape) {
-    const square = ui.shape === "square";
-    const recent = match.log.slice(-6);
-    const lastChat = match.chat.at(-1);
-    const tool = "relative grid h-10 w-10 shrink-0 place-items-center rounded-full text-ink-2 transition active:scale-95 active:bg-white/60";
-    return (
-      <>
-        {toast.node}
-        <div className="flex min-h-0 flex-1 justify-center gap-3 py-[max(8px,env(safe-area-inset-top))]">
-          <div className={square ? "flex aspect-square h-full min-h-0 max-w-[calc(100%-272px)] shrink-0 flex-col" : "flex min-h-0 min-w-0 flex-1 flex-col"}>
-            {board}
-          </div>
-          <aside className={`glass flex min-h-0 shrink-0 flex-col gap-2 !rounded-[24px] p-2.5 ${square ? "w-auto min-w-[260px] max-w-[360px] flex-1" : "w-[min(290px,40vw)]"}`}>
-            <div className="flex shrink-0 items-center gap-2 px-1.5 pt-0.5">
-              <span className={`h-2 w-2 shrink-0 rounded-full ${myTurn ? "bg-ink" : "bg-faint"}`} />
-              <span className="min-w-0 flex-1 truncate text-[0.95rem]">{status}</span>
-              <span className="flex shrink-0 items-center gap-1 text-[0.72rem] text-faint">{chip}</span>
-            </div>
-            {pill}
-            {seatStrip && <div className="shrink-0 [&>div]:flex-wrap [&>div]:overflow-visible">{seatStrip}</div>}
-            <div className="flex min-h-0 flex-1 flex-col justify-end overflow-hidden rounded-[16px] bg-white/25 px-3 py-2">
-              {recent.length === 0 && !lastChat && (
-                <div className="my-auto px-2 text-center">
-                  <div className="text-[1.05rem] text-ink-2">{mod.name.zh}</div>
-                  <div className="mt-1 text-[0.8rem] leading-snug text-faint">{mod.blurb}</div>
-                </div>
-              )}
-              <div className="flex min-h-0 flex-col-reverse gap-0.5 overflow-hidden [mask-image:linear-gradient(to_top,black_70%,transparent)]">
-                {[...recent].reverse().map((l, i) => (
-                  <div key={match.log.length - i} className={`flex shrink-0 gap-1.5 truncate text-[0.82rem] leading-snug ${i === 0 ? "text-ink" : "text-muted"}`}>
-                    <span className="shrink-0 text-faint">{l.seat === me ? "你" : names[l.seat]}</span>
-                    <span className="truncate">{l.move}</span>
-                  </div>
-                ))}
-              </div>
-              {lastChat && (
-                <button onClick={() => setChatOpen(true)} className="mt-1.5 shrink-0 truncate border-t border-black/5 pt-1.5 text-left text-[0.82rem] italic text-ink-2">
-                  {lastChat.seat === me ? "你" : names[lastChat.seat]}：{lastChat.text}
-                </button>
-              )}
-            </div>
-            {Actions && !st.outcome && me !== null && (
-              <div className="flex shrink-0 gap-2 [&_.btn]:!min-h-[42px] [&_.btn]:flex-1">
-                <Actions {...props} />
-              </div>
-            )}
-            <div className="flex shrink-0 items-center justify-between px-0.5">
-              <button className={tool} onClick={exitToHost} aria-label="回大厅">
-                <IconHome width={20} height={20} />
-              </button>
-              {!st.outcome && me !== null && (
-                <button className={tool} onClick={resign} aria-label="认输">
-                  <IconFlag width={20} height={20} />
-                </button>
-              )}
-              {onInvite && openSeats && (
-                <button className={tool} onClick={onInvite} aria-label="邀请">
-                  <IconInvite width={20} height={20} />
-                </button>
-              )}
-              {!embedded && (
-                <button className={tool} onClick={() => setNamesOpen(true)} aria-label="名字">
-                  <IconName width={20} height={20} />
-                </button>
-              )}
-              <button className={tool} onClick={() => setChatOpen(true)} aria-label="聊天">
-                <IconChat width={20} height={20} />
-                {unread && <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-accent" />}
-              </button>
-              {!embedded && (
-                <button className={tool} onClick={() => setSettingsOpen(true)} aria-label="设置">
-                  <IconGear width={19} height={19} />
-                </button>
-              )}
-            </div>
-            {extra && <div className="shrink-0 [&_.btn]:!min-h-[32px] [&_.btn]:!text-xs">{extra}</div>}
-          </aside>
-        </div>
-        {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} />}
-        {sheets}
-      </>
-    );
-  }
-
-  if (!wide) {
+  // 嵌入主播掌机环境时，统一采用全景竖直/自适应流，彻底消灭挤扁的左右硬割裂横屏
+  if (!wide || embedded) {
     return (
       <>
         {toast.node}
         <Header
           status={chip}
           left={
-            <div className="flex min-w-0 items-center gap-2 text-[1.05rem]">
-              <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${myTurn ? "bg-ink" : "bg-faint"}`} />
+            <div className="flex min-w-0 items-center gap-2 text-[1rem]">
+              <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${myTurn ? "bg-[#07c160] pulse-dot" : "bg-faint"}`} />
               <span className="truncate">{status}</span>
             </div>
           }
@@ -417,6 +390,7 @@ export function MatchScreen({
     );
   }
 
+  // 大屏宽屏桌面端
   const stats = ui.stats?.(match.view, match) ?? [];
   return (
     <>
@@ -456,7 +430,7 @@ export function MatchScreen({
         {me !== null && !st.outcome && (
           <motion.section {...card} className="area-controls flex flex-wrap gap-3">
             {Actions && <Actions {...props} />}
-            <button className="btn btn-glass flex-1" onClick={resign}>
+            <button className="btn btn-glass flex-1" onClick={() => setConfirmResign(true)}>
               认输
             </button>
           </motion.section>
