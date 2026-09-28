@@ -1,6 +1,8 @@
 import {
   applyMatchAction,
+  autoplay,
   createMatch,
+  statusOf,
   viewMatch,
   type GameKind,
   type Match,
@@ -11,7 +13,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, getResolvedServerUrl } from "./api";
 
-// 本地离线对局内存缓存池，支持页面刷新保活
+// 本地离线对局内存池
 const localMatches = new Map<string, Match>();
 
 function getQueryParam(key: string): string | null {
@@ -26,7 +28,30 @@ function getQueryParam(key: string): string | null {
 }
 
 /**
- * 在本地端内创建纯规则引擎对局
+ * 完整连环自动流转：只要当前轮到的不是人类玩家（seat 0），就全力让 Bot 执行动作
+ * 彻底解决飞行棋掷骰后多步卡死、第 3 个人无法行动的严重缺陷
+ */
+function runFullAutoplay(m: Match, now: number): Match {
+  let cur = m;
+  for (let step = 0; step < 1200; step++) {
+    const st = statusOf(cur);
+    if (st.outcome) break;
+
+    // 检查等待行动的座位中是否有 bot（非人类座）
+    const botSeat = st.waitingOn.find((s) => s !== 0 && cur.seats[s]?.kind === "bot");
+    if (botSeat === undefined) break;
+
+    const next = autoplay(cur, now);
+    if (next === cur || next.version === cur.version && next.log.length === cur.log.length) {
+      break;
+    }
+    cur = next;
+  }
+  return cur;
+}
+
+/**
+ * 在本地端内创建纯规则引擎对局，严格适配多人游戏规格
  */
 function createLocalEngineMatch(id: string, seatToken: string): Match {
   const cached = localMatches.get(id);
@@ -41,7 +66,7 @@ function createLocalEngineMatch(id: string, seatToken: string): Match {
     if (rawNpcs) npcs = JSON.parse(rawNpcs);
   } catch (_) {}
 
-  // 构造座位：玩家在 0 号位，自建同伴在后续座位（以 bot 规则驱动）
+  // 构造座位：玩家在 0 号位，其余同伴座位一律标记为 bot，由规则层全自动出招
   const seats: { kind: "human" | "bot"; name: string; token: string; joined: boolean }[] = [
     { kind: "human", name: playerName, token: seatToken || "local_me", joined: true },
   ];
@@ -65,13 +90,16 @@ function createLocalEngineMatch(id: string, seatToken: string): Match {
   }
 
   const now = Date.now();
-  const m = createMatch({
+  let m = createMatch({
     id,
     kind,
     seats,
     seed: (Math.random() * 1000000) >>> 0,
     now,
   });
+
+  // 如果开局先手不是玩家，立即自动推进轮次
+  m = runFullAutoplay(m, now);
 
   localMatches.set(id, m);
   return m;
@@ -102,14 +130,48 @@ export function useMatch(id: string, seatToken: string) {
       if (!res.ok) {
         throw new Error(res.message || res.error);
       }
-      localMatches.set(id, res.match);
-      localMatchRef.current = res.match;
-      const view = viewMatch(res.match, seat);
+
+      // 玩家走完之后，连续驱动所有 bot（同伴）推进回合，直到轮到人类或终局
+      const finalized = runFullAutoplay(res.match, Date.now());
+
+      localMatches.set(id, finalized);
+      localMatchRef.current = finalized;
+      const view = viewMatch(finalized, seat);
       setMatch(view);
       return view;
     },
     [id, seatToken, setMatch],
   );
+
+  // 注入外部对话（比如掌机调起大模型生成的同伴回复）
+  const injectExternalChat = useCallback(
+    (speakerSeat: Seat, text: string) => {
+      let cur = localMatchRef.current || localMatches.get(id);
+      if (!cur) return;
+      const updatedMatch: Match = {
+        ...cur,
+        chat: [...cur.chat, { seat: speakerSeat, text, t: Date.now(), at: cur.log.length }].slice(-100),
+        updatedAt: Date.now(),
+        version: cur.version + 1,
+      };
+      localMatches.set(id, updatedMatch);
+      localMatchRef.current = updatedMatch;
+      setMatch(viewMatch(updatedMatch, 0));
+    },
+    [id, setMatch],
+  );
+
+  useEffect(() => {
+    // 监听掌机外壳传递进来的消息注入指令
+    const onHostMessage = (ev: MessageEvent) => {
+      if (!ev || !ev.data) return;
+      if (ev.data.type === "MCYT_LOBBY_INJECT_CHAT") {
+        injectExternalChat(ev.data.seat || 1, ev.data.text || "");
+      }
+    };
+    window.addEventListener("message", onHostMessage);
+    return () => window.removeEventListener("message", onHostMessage);
+  }, [injectExternalChat]);
 
   useEffect(() => {
     setMatchRaw(null);
@@ -119,7 +181,6 @@ export function useMatch(id: string, seatToken: string) {
     let retry = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
-    // 判别是否优先启动本地纯规则引擎（本地 match 或者无服务器配置）
     const isLocalMatch = id.startsWith("local_") || id.includes("local");
 
     if (isLocalMatch) {
@@ -136,14 +197,13 @@ export function useMatch(id: string, seatToken: string) {
       return;
     }
 
-    // 远端联机模式：尝试连接服务器
+    // 远端联机模式
     api.getGame(id, seatToken || undefined).then(
       (m) => {
         setMatch(m);
       },
       (e: unknown) => {
-        // 如果远端未找到或网络异常，自愈回退到本地纯规则对局，绝不卡死用户
-        console.warn("Server unavailable or game not found, fallback to local engine:", e);
+        console.warn("Server unavailable, fallback to local engine:", e);
         try {
           const m = createLocalEngineMatch(id, seatToken);
           localMatchRef.current = m;
