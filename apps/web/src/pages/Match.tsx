@@ -14,7 +14,6 @@ function takeUrlParams(id: string) {
   const t = q.get("t") || q.get("token");
   if (t) prefs.setSeatToken(id, t);
 
-  // 如果掌机传递了裁判服务器地址，自动同步进 prefs
   const serverUrl = q.get("serverUrl");
   if (serverUrl && typeof (prefs as any).setServer === "function") {
     (prefs as any).setServer(serverUrl);
@@ -29,7 +28,7 @@ function takeUrlParams(id: string) {
 export function MatchPage({ id }: { id: string }) {
   const [params] = useState(() => takeUrlParams(id));
   const [token, setToken] = useState(() => prefs.seatToken(id));
-  const { match, setMatch, error, live, syncedAt } = useMatch(id, token);
+  const { match, setMatch, error, live, syncedAt, performLocalAction } = useMatch(id, token);
   const [owner, setOwner] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(params.invite);
   const [choices, setChoices] = useState<{ invites: Invite[]; tokens: (string | null)[] } | null>(null);
@@ -43,7 +42,6 @@ export function MatchPage({ id }: { id: string }) {
     }, () => {});
   }, []);
 
-  // The site owner opening a game without a seat may take one of the human seats.
   useEffect(() => {
     if (!owner || token || !match) return;
     api.invites(id).then((r) => {
@@ -89,16 +87,27 @@ export function MatchPage({ id }: { id: string }) {
         chip={
           <>
             <span className={`inline-block h-2 w-2 rounded-full ${live ? "bg-ink" : "bg-faint"}`} />
-            {live ? `live · ${hhmm(syncedAt ?? Date.now())}` : "offline"}
+            {live ? (id.startsWith("local_") ? "本地引擎" : `live · ${hhmm(syncedAt ?? Date.now())}`) : "offline"}
           </>
         }
         onInvite={owner ? () => setInviteOpen(true) : undefined}
         perform={async (action) => {
+          // 本地对局直接走端内纯规则引擎，免去 HTTP 网络往返
+          if (id.startsWith("local_") || id.includes("local")) {
+            await performLocalAction(action);
+            return;
+          }
+
           if (!token) throw new Error("你在观战，没有座位");
           try {
             setMatch(await api.act(id, token, action));
             if (action.type === "rename") prefs.rememberNames(action.name);
           } catch (e) {
+            // 如果网络提交失败，自动退火到本地执行
+            if (performLocalAction) {
+              await performLocalAction(action);
+              return;
+            }
             if (e instanceof ApiError && (e.status === 401 || e.status === 403)) throw new Error("你没有这一局的座位");
             throw e;
           }
