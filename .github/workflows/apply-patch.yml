@@ -1,1 +1,33 @@
+name: apply-patch
 
+# 用法：把 patch.zip 上传到仓库根目录（提交到 main），
+# 这个流程会自动把压缩包里的文件按原目录覆盖进仓库，然后删掉 patch.zip。
+on:
+  push:
+    branches: [main]
+    paths:
+      - "patch.zip"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 解压覆盖
+        run: |
+          set -e
+          unzip -l patch.zip
+          unzip -o patch.zip
+          rm -f patch.zip
+
+      - name: 提交
+        run: |
+          git config user.name "patch-bot"
+          git config user.email "patch-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "apply patch.zip" || echo "没有变化"
+          git push
