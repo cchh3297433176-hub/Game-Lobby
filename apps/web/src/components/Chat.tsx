@@ -1,6 +1,6 @@
 import type { MatchChat, Seat } from "@rain-go/engine";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { IconSend } from "./icons";
+import { IconPoke, IconSend } from "./icons";
 
 export function ChatList({
   chat,
@@ -143,7 +143,8 @@ export function Sheet({
                     onClick={() => onPoke(n)}
                     className="flex items-center gap-1 rounded-full border border-[#07c160]/30 bg-[#e8f8ee] px-2 py-0.5 text-[11px] font-medium text-[#07c160] active:scale-95"
                   >
-                    <span>👉 戳</span>
+                    <IconPoke width={13} height={13} />
+                    <span>戳</span>
                     <span className="font-semibold">{n}</span>
                   </button>
                 ))}

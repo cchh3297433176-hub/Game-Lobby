@@ -1,4 +1,5 @@
 import {
+  GAMES,
   applyMatchAction,
   autoplay,
   createMatch,
@@ -15,6 +16,9 @@ import { api, ApiError, getResolvedServerUrl } from "./api";
 
 // 本地离线对局内存池
 const localMatches = new Map<string, Match>();
+
+// 同伴每走一步之间的停顿（毫秒），让玩家看得到谁在出招
+const BOT_STEP_MS = 850;
 
 function getQueryParam(key: string): string | null {
   if (typeof window === "undefined") return null;
@@ -118,6 +122,51 @@ export function useMatch(id: string, seatToken: string) {
     setSyncedAt(Date.now());
   }, []);
 
+  // 同伴逐步出招：每步停顿一下并刷新界面，玩家才能看到每个角色在操作
+  const botTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const botRun = useRef(0);
+
+  useEffect(
+    () => () => {
+      botRun.current++;
+      clearTimeout(botTimer.current);
+    },
+    [],
+  );
+
+  const stepBots = useCallback(
+    (token: number) => {
+      const tick = () => {
+        if (botRun.current !== token) return;
+        const cur = localMatchRef.current;
+        if (!cur) return;
+        const st = statusOf(cur);
+        if (st.outcome) return;
+        const seat = st.waitingOn.find((s) => cur.seats[s]?.kind === "bot");
+        if (seat === undefined) return;
+        const mod = GAMES[cur.kind];
+        if (!mod.bot) return;
+        const move = mod.bot(cur.state, seat);
+        const res = mod.apply(cur.state, seat, move);
+        if (!res.ok) return;
+        const now = Date.now();
+        const next: Match = {
+          ...cur,
+          state: res.state,
+          log: [...cur.log, { seat, move: res.log ?? move, t: now }].slice(-500),
+          updatedAt: now,
+          version: cur.version + 1,
+        };
+        localMatches.set(id, next);
+        localMatchRef.current = next;
+        setMatch(viewMatch(next, 0));
+        botTimer.current = setTimeout(tick, BOT_STEP_MS);
+      };
+      botTimer.current = setTimeout(tick, BOT_STEP_MS);
+    },
+    [id, setMatch],
+  );
+
   // 离线/本地动作执行派发
   const performLocalAction = useCallback(
     async (action: MatchAction): Promise<MatchView> => {
@@ -126,13 +175,38 @@ export function useMatch(id: string, seatToken: string) {
         cur = createLocalEngineMatch(id, seatToken);
       }
       const seat: Seat = 0; // 玩家始终在 0 号位
+
+      // 走棋/出牌：只落玩家这一步，同伴的动作交给 stepBots 逐步展示
+      if (action.type === "move") {
+        const mod = GAMES[cur.kind];
+        if (statusOf(cur).outcome) throw new Error("对局已经结束");
+        const move = String(action.move ?? "").trim();
+        if (!move) throw new Error("没有写这步棋");
+        const r = mod.apply(cur.state, seat, move);
+        if (!r.ok) throw new Error(r.error);
+        const now = Date.now();
+        const next: Match = {
+          ...cur,
+          state: r.state,
+          log: [...cur.log, { seat, move: r.log ?? move, t: now }].slice(-500),
+          updatedAt: now,
+          version: cur.version + 1,
+        };
+        localMatches.set(id, next);
+        localMatchRef.current = next;
+        const v = viewMatch(next, seat);
+        setMatch(v);
+        botRun.current++;
+        stepBots(botRun.current);
+        return v;
+      }
+
       const res = applyMatchAction(cur, seat, action, Date.now());
       if (!res.ok) {
         throw new Error(res.message || res.error);
       }
 
-      // 玩家走完之后，连续驱动所有 bot（同伴）推进回合，直到轮到人类或终局
-      const finalized = runFullAutoplay(res.match, Date.now());
+      const finalized = res.match;
 
       localMatches.set(id, finalized);
       localMatchRef.current = finalized;
@@ -140,7 +214,7 @@ export function useMatch(id: string, seatToken: string) {
       setMatch(view);
       return view;
     },
-    [id, seatToken, setMatch],
+    [id, seatToken, setMatch, stepBots],
   );
 
   // 注入外部对话（比如掌机调起大模型生成的同伴回复）

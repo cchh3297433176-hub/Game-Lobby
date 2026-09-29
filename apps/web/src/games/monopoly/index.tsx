@@ -539,10 +539,10 @@ export const monopolyUI: GameUI<MonopolyView> = {
     if (v.phase === "roll") return p.inJail ? (p.cards ? "坐牢中：掷对子、交 50 或用卡" : "坐牢中：掷对子或交 50") : v.rollAgain ? "对子！再掷一次" : "到你掷骰";
     return v.buildable.length ? "点自己的地可以盖房" : "可以结束回合";
   },
-  badge: (v) =>
+  badge: (v, _m, seat) =>
     v.me === null
       ? { value: String(v.round), label: v.rounds ? `ROUND / ${v.rounds}` : "ROUND" }
-      : { value: String(v.players[v.me]!.cash), label: `CASH · 第 ${v.round} 轮` },
+      : { value: String(v.players[seat ?? v.me]?.cash ?? v.players[v.me]!.cash), label: `CASH · 第 ${v.round} 轮` },
   stats: (v) => {
     const round = { label: "轮次", value: v.rounds ? `${v.round}/${v.rounds}` : String(v.round) };
     const left = { label: "在局", value: `${v.players.filter((p) => !p.bankrupt).length}/${v.players.length}` };

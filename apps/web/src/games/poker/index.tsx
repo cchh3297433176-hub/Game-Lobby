@@ -450,7 +450,7 @@ export const pokerUI: GameUI<PokerView> = {
     if (v.players > 2 && v.toAct !== null) return `${pokerStreetZh[v.street]} · 等 ${match.seats[v.toAct]?.name ?? ""}`;
     return `${pokerStreetZh[v.street]} · 底池 ${v.pot}`;
   },
-  badge: (v) => (v.viewer === null ? { value: String(v.pot), label: "POT" } : { value: String(v.seats[v.viewer]!.stack), label: "CHIPS" }),
+  badge: (v, _m, seat) => (v.viewer === null ? { value: String(v.pot), label: "POT" } : { value: String((v.seats[seat ?? v.viewer] ?? v.seats[v.viewer]!).stack), label: "CHIPS" }),
   stats: (v) => [
     { label: "手数", value: v.handLimit ? `${v.hand}/${v.handLimit}` : String(v.hand) },
     { label: "盲注", value: `${v.sb}/${v.bb}` },

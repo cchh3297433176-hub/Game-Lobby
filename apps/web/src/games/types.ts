@@ -29,7 +29,8 @@ export interface GameUI<V = any> {
   /** Short header status; return null to use the default ("轮到你了" / "X 思考中…" / result). */
   status?: (view: V, match: MatchView<V>) => string | null;
   /** Small figure for the right side of the black pill, e.g. { value: "17", label: "MOVE" }. */
-  badge?: (view: V, match: MatchView<V>) => { value: string; label: string };
+  /** `seat` is the character the pill is showing; games with per-player figures should report that seat's. */
+  badge?: (view: V, match: MatchView<V>, seat?: Seat) => { value: string; label: string };
   /** True for games that are roomier with the phone turned sideways; portrait phones get a one-time hint. */
   prefersLandscape?: boolean;
   /** Extra numbers for the desktop stats card. */

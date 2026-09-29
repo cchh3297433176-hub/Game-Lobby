@@ -1,10 +1,10 @@
 import { GAMES, type MatchAction, type MatchView, type Seat } from "@rain-go/engine";
-import { motion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState, useMemo, type ReactNode } from "react";
 import { UIS } from "../games";
 import type { BoardProps } from "../games/types";
 import { ChatInput, ChatList, Sheet } from "./Chat";
-import { DropMark, IconChat, IconFlag, IconHome, IconInvite, IconName } from "./icons";
+import { DropMark, IconChat, IconFlag, IconHome, IconInvite, IconName, IconPoke } from "./icons";
 import { NameSheet } from "./NameSheet";
 import { Pill, Stat } from "./Pill";
 import { Header, useLandscape, useWide } from "./Shell";
@@ -100,7 +100,7 @@ export function MatchScreen({
   const [namesOpen, setNamesOpen] = useState(false);
   const [confirmResign, setConfirmResign] = useState(false);
   const [seenChat, setSeenChat] = useState(0);
-  const [imgError, setImgError] = useState(false);
+  const [badAvatars, setBadAvatars] = useState<Record<string, boolean>>({});
 
   const mod = GAMES[match.kind];
   const ui = UIS[match.kind];
@@ -141,6 +141,18 @@ export function MatchScreen({
     }
   };
 
+  // 戳一戳：用户点了才通知掌机生成同伴回复（说话本身不触发回复，方便连发多句）
+  const poke = (targetName: string) => {
+    if (me === null) return;
+    try {
+      window.parent?.postMessage(
+        { type: "MCYT_LOBBY_POKE_NPC", targetName, kind: match.kind, matchId: match.id },
+        "*",
+      );
+    } catch (_) {}
+    toast.show(`你戳了戳 ${targetName}`);
+  };
+
   const st = match.status;
   const myTurn = me !== null && !st.outcome && st.waitingOn.includes(me);
   const props: BoardProps = {
@@ -163,7 +175,7 @@ export function MatchScreen({
     st.resultText ??
     ui.status?.(match.view, match) ??
     (me === null ? `观战中 · 等 ${waitingNames.join("、")}` : myTurn ? "轮到你了" : `${waitingNames.join("、") || "对手"} 思考中…`);
-  const badge = ui.badge?.(match.view, match) ?? { value: String(match.log.length), label: "MOVE" };
+  const badge = ui.badge?.(match.view, match, featured) ?? { value: String(match.log.length), label: "MOVE" };
   const unread = match.chat.length > seenChat && match.chat.at(-1)?.seat !== me;
   const labelOf = (i: Seat) => match.labels[i] ?? "";
   const seatLine =
@@ -171,11 +183,21 @@ export function MatchScreen({
       ? [me ?? 0, 1 - (me ?? 0)].map((i) => `${names[i]} ${labelOf(i)}`).join(" · ")
       : `${n} 人桌 · ${me === null ? "观战" : `你 ${labelOf(me) || `${me + 1} 号位`}`}`;
   const thinking = !st.outcome && acting === featured;
-  const subtitle = (
-    <>
-      {thinking && <span className="pulse-dot mr-1">●</span>}
-      {featuredSay ? `“${featuredSay.text}”` : seatLine}
-    </>
+  const subtitle = thinking ? (
+    <span className="inline-flex items-center gap-0.5">
+      <span>正在操作中</span>
+      {[0, 1, 2].map((i) => (
+        <motion.span
+          key={i}
+          animate={{ opacity: [0.2, 1, 0.2] }}
+          transition={{ duration: 1, repeat: Infinity, delay: i * 0.18 }}
+        >
+          .
+        </motion.span>
+      ))}
+    </span>
+  ) : (
+    <>{featuredSay ? `“${featuredSay.text}”` : seatLine}</>
   );
   const openSeats = match.seats.some((s) => s.kind !== "bot" && !s.joined);
   const verdict = st.outcome
@@ -241,8 +263,7 @@ export function MatchScreen({
   const featuredName = names[featured] || "";
   const featuredNpc =
     embeddedNpcs.find((npc) => npc.name === featuredName || String(featured) === npc.id) ||
-    embeddedNpcs[featured - 1] ||
-    embeddedNpcs[0];
+    embeddedNpcs[featured - 1];
 
   const avatarSrc = featuredNpc?.avatar?.trim();
 
@@ -266,8 +287,8 @@ export function MatchScreen({
   const sheets = (
     <>
       {chatOpen && (
-        <Sheet title="Whisper" onClose={() => setChatOpen(false)}>
-          <ChatList chat={match.chat} me={me} names={names} className="mt-3 min-h-0 flex-1" />
+        <Sheet title="Whisper" onClose={() => setChatOpen(false)} names={names} me={me} onPoke={poke}>
+          <ChatList chat={match.chat} me={me} names={names} onPoke={poke} className="mt-3 min-h-0 flex-1" />
           {me !== null && (
             <div className="mt-3 flex shrink-0">
               <ChatInput to={n === 2 ? names[1 - me]! : "大家"} busy={busy} compact onSend={(text) => send({ type: "say", text })} />
@@ -303,26 +324,47 @@ export function MatchScreen({
 
   const pill = (
     <button onClick={() => setChatOpen(true)} className="pill-black flex shrink-0 items-center gap-3 !rounded-[24px] px-3.5 py-2.5 text-left land:gap-2 land:!rounded-[16px] land:px-2.5 land:py-1.5">
-      <span className="relative grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-full border border-white/15 bg-[#222] land:h-9 land:w-9">
-        {avatarSrc && !imgError ? (
-          <img
-            src={avatarSrc}
-            alt={featuredName}
-            className="h-full w-full object-cover"
-            onError={() => setImgError(true)}
-          />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center bg-[#07c160]/20 text-xs font-semibold text-[#07c160]">
-            {featuredName ? featuredName.slice(0, 1) : <DropMark width={20} height={20} />}
-          </div>
-        )}
-        {unread && <span className="absolute top-0 right-0 h-2.5 w-2.5 rounded-full border border-black bg-[#fa5151]" />}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-[1.2rem] font-semibold leading-tight text-white land:text-[1rem]">{featuredName}</span>
-        <span className="block truncate text-[0.85rem] text-white/70 land:text-[0.75rem]">{subtitle}</span>
-      </span>
-      <span className="shrink-0 text-right">
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.span
+          key={`${featured}-${thinking ? "act" : "idle"}`}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -10 }}
+          transition={{ duration: 0.18 }}
+          className="flex min-w-0 flex-1 items-center gap-3 land:gap-2"
+        >
+          <span className="relative grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-full border border-white/15 bg-[#222] land:h-9 land:w-9">
+            {avatarSrc && !badAvatars[avatarSrc] ? (
+              <img
+                src={avatarSrc}
+                alt={featuredName}
+                className="h-full w-full object-cover"
+                onError={() => setBadAvatars((p) => ({ ...p, [avatarSrc]: true }))}
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center bg-[#07c160]/20 text-xs font-semibold text-[#07c160]">
+                {featuredName ? featuredName.slice(0, 1) : <DropMark width={20} height={20} />}
+              </div>
+            )}
+            {thinking && (
+              <motion.span
+                className="pointer-events-none absolute inset-0 rounded-full border-2 border-[#07c160]"
+                animate={{ opacity: [0.2, 1, 0.2] }}
+                transition={{ duration: 1.1, repeat: Infinity }}
+              />
+            )}
+            {unread && <span className="absolute top-0 right-0 h-2.5 w-2.5 rounded-full border border-black bg-[#fa5151]" />}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[1.2rem] font-semibold leading-tight text-white land:text-[1rem]">{featuredName}</span>
+            <span className="block truncate text-[0.85rem] text-white/70 land:text-[0.75rem]">{subtitle}</span>
+            <span className="hidden truncate text-[0.7rem] text-white/55 land:block">
+              {verdict ?? badge.value} {verdict ? mod.name.zh : badge.label}
+            </span>
+          </span>
+        </motion.span>
+      </AnimatePresence>
+      <span className="shrink-0 text-right land:hidden">
         <span className="block text-[1.35rem] font-bold leading-none text-white land:text-[1.1rem]">{verdict ?? badge.value}</span>
         <span className="mt-1 block text-[0.7rem] text-white/55 land:text-[0.62rem]">{verdict ? mod.name.zh : badge.label}</span>
       </span>
@@ -352,6 +394,43 @@ export function MatchScreen({
       </button>
     </>
   );
+
+  // 手机横屏：左边棋盘吃满高度，右边窄栏放状态、角色条和操作按钮（各游戏棋盘自适应所给的盒子）
+  if (landscape && !wide) {
+    const sidePct = ui.shape === "square" ? "w-[40%] max-w-[260px]" : "w-[36%] max-w-[230px]";
+    return (
+      <>
+        {toast.node}
+        <div className="flex min-h-0 flex-1 gap-2 pt-1">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">{board}</div>
+          <div className={`flex min-h-0 shrink-0 flex-col gap-1.5 overflow-y-auto ${sidePct}`}>
+            <div className="flex min-w-0 items-center gap-2 text-[0.85rem]">
+              <span className={`h-2 w-2 shrink-0 rounded-full ${myTurn ? "bg-[#07c160] pulse-dot" : "bg-faint"}`} />
+              <span className="truncate">{status}</span>
+            </div>
+            {pill}
+            {seatStrip}
+            <div className="mt-auto flex shrink-0 flex-col gap-1.5">
+              <div className="flex flex-wrap gap-1.5 [&_.btn]:!min-h-[38px]">
+                {Actions && !st.outcome && me !== null ? (
+                  <Actions {...props} />
+                ) : (
+                  <div className="chip min-w-0 flex-1 justify-center !text-ink">
+                    <span className="truncate">
+                      {match.log.length ? `${match.log.at(-1)!.seat === me ? "你" : names[match.log.at(-1)!.seat]} · ${match.log.at(-1)!.move}` : mod.name.zh}
+                    </span>
+                  </div>
+                )}
+              </div>
+              <div className="flex gap-1.5 [&_.btn]:!min-h-[38px] [&_.btn]:flex-1">{iconButtons}</div>
+            </div>
+            {extra}
+          </div>
+        </div>
+        {sheets}
+      </>
+    );
+  }
 
   // 嵌入主播掌机环境时，统一采用全景竖直/自适应流，彻底消灭挤扁的左右硬割裂横屏
   if (!wide || embedded) {
@@ -446,8 +525,25 @@ export function MatchScreen({
         )}
         <div className="area-chat flex flex-col gap-3">
           <motion.section {...card} className="glass px-6 py-5">
-            <div className="text-[1.3rem] font-semibold">Whisper</div>
-            <ChatList chat={match.chat} me={me} names={names} className="mt-3 max-h-56" />
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[1.3rem] font-semibold">Whisper</div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {match.seats.map((s, i) =>
+                  i === me ? null : (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => poke(s.name)}
+                      className="flex items-center gap-1 rounded-full border border-[#07c160]/30 bg-[#e8f8ee] px-2.5 py-1 text-[12px] font-medium text-[#07c160] active:scale-95"
+                    >
+                      <IconPoke width={14} height={14} />
+                      <span>戳 {s.name}</span>
+                    </button>
+                  ),
+                )}
+              </div>
+            </div>
+            <ChatList chat={match.chat} me={me} names={names} onPoke={poke} className="mt-3 max-h-56" />
             {me !== null && (
               <div className="mt-3 flex">
                 <ChatInput to={n === 2 ? names[1 - me]! : "大家"} busy={busy} onSend={(text) => send({ type: "say", text })} />

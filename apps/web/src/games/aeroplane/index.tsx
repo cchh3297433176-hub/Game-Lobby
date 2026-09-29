@@ -595,7 +595,7 @@ export const aeroplaneUI: GameUI<AeroplaneView> = {
     if (v.you === null && v.prev && passed) return `等 ${who(v.toMove)} · ${who(v.prev.seat)}掷 ${v.roll} 没法走`;
     return null;
   },
-  badge: (v) => ({ value: String(v.players[v.you ?? 0]?.home ?? 0), label: "到家" }),
+  badge: (v, _m, seat) => ({ value: String(v.players[seat ?? v.you ?? 0]?.home ?? 0), label: "到家" }),
   stats: (v, match) => [
     ...v.players.map((p) => ({
       label: p.seat === v.you ? `我方 ${p.label}` : `${(match.seats[p.seat]?.name ?? "").slice(0, 6)} ${p.label}`,

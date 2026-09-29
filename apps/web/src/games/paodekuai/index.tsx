@@ -301,7 +301,7 @@ export const paodekuaiUI: GameUI<PaodekuaiView> = {
     if (!v.trick?.combo) return v.mustLead ? `须带 ${pdkCardText(v.mustLead)} 先出` : "到你出牌";
     return `要压过${pdkComboName(v.trick.combo)}`;
   },
-  badge: (v) => (v.viewer === null ? { value: String(v.tricks), label: "轮" } : { value: String(v.hand.length), label: "剩牌" }),
+  badge: (v, _m, seat) => (v.viewer === null ? { value: String(v.tricks), label: "轮" } : { value: String(v.counts[seat ?? v.viewer] ?? v.hand.length), label: "剩牌" }),
   stats: (v, m) => {
     const others = Array.from({ length: v.players }, (_, i) => i).filter((i) => i !== v.viewer);
     return [

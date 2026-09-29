@@ -293,7 +293,7 @@ export const doudizhuUI: GameUI<DdzView> = {
     if (v.landlord !== null) return `地主是 ${nameOf(match, v.landlord)} · 等 ${nameOf(match, v.turn)}`;
     return null;
   },
-  badge: (v) => ({ value: v.viewer === null ? v.counts.join("/") : String(v.hand.length), label: "剩牌" }),
+  badge: (v, _m, seat) => ({ value: v.viewer === null ? v.counts.join("/") : String(v.counts[seat ?? v.viewer] ?? v.hand.length), label: "剩牌" }),
   stats: (v) => [
     { label: "局数", value: `${v.handNo}/${v.hands}` },
     { label: "倍数", value: v.bid ? `×${v.bid * v.multiplier}` : "—" },
